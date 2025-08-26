@@ -1,0 +1,18 @@
+import express from "express";
+import cors from "cors";
+import { AppDataSource } from "./data-source";
+import formRoutes from "./routes/formRoutes";
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+app.use("/api/form", formRoutes);
+
+AppDataSource.initialize()
+  .then(() => {
+    console.log("Data Source initialized");
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch((err) => console.error("Error initializing data source:", err));

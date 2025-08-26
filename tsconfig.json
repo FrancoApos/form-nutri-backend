@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",               // compatible con Node moderno
+    "module": "commonjs",             // para Node.js
+    "rootDir": "./src",               // carpeta con tu código fuente
+    "outDir": "./dist",               // carpeta de compilación
+    "strict": true,                   // mantiene verificación estricta
+    "esModuleInterop": true,          // necesario para importar paquetes comunes
+    "experimentalDecorators": true,   // obligatorio para TypeORM
+    "emitDecoratorMetadata": true,    // obligatorio para TypeORM
+    "skipLibCheck": true,             // evita errores en librerías
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
+  }
+}
