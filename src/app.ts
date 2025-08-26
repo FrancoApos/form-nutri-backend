@@ -1,7 +1,10 @@
+import dotenv from "dotenv";
+dotenv.config(); 
+import cors  from 'cors';
 import express from "express";
-import cors from "cors";
 import { AppDataSource } from "./data-source";
 import formRoutes from "./routes/formRoutes";
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
