@@ -4,39 +4,58 @@ import { User } from "../entities/User";
 import { FoodItem } from "../entities/FoodItem";
 import { FoodResponse } from "../entities/FoodResponse";
 
+import { v4 as uuidv4 } from "uuid";
 const router = Router();
+
 
 router.post("/submit", async (req, res) => {
   try {
-    const { apellido, dni, foods } = req.body;
-    if (!dni || !apellido || !foods) return res.status(400).json({ message: "Datos incompletos" });
+    const { apellido, dni, email, foods } = req.body;
+    if (!dni || !apellido || !email || !foods) {
+      return res.status(400).json({ message: "Datos incompletos" });
+    }
 
     const userRepo = AppDataSource.getRepository(User);
     let user = await userRepo.findOne({ where: { dni } });
 
     if (!user) {
-      user = userRepo.create({ dni, apellido });
+      user = userRepo.create({ dni, apellido, email });
+      await userRepo.save(user);
+    } else {
+      user.apellido = apellido;
+      user.email = email;
       await userRepo.save(user);
     }
 
     const foodItemRepo = AppDataSource.getRepository(FoodItem);
     const responseRepo = AppDataSource.getRepository(FoodResponse);
 
+    // Generar un único id_response para este envío
+    const id_response = uuidv4();
+
     for (const foodName in foods) {
       const item = await foodItemRepo.findOne({ where: { name: foodName } });
       if (!item) continue;
 
       const { quantity, frequency, observations } = foods[foodName];
-      const response = responseRepo.create({ user, food: item, quantity, frequency, observations });
+      const response = responseRepo.create({
+        user,
+        food: item,
+        quantity,
+        frequency,
+        observations,
+        id_response, // 👈 lo guardamos en cada respuesta
+      });
       await responseRepo.save(response);
     }
 
-    res.json({ message: "Respuestas guardadas correctamente" });
+    res.json({ message: "Respuestas guardadas correctamente", id_response });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error al guardar respuestas" });
   }
 });
+
 
 router.get("/responses/:dni", async (req, res) => {
   try {
@@ -147,6 +166,60 @@ router.get("/stats/user/:dni", async (req, res) => {
     res.status(500).json({ message: "Error obteniendo datos del usuario" });
   }
 });
+
+router.get("/responses/:dni", async (req, res) => {
+  try {
+    const { dni } = req.params;
+
+    const userRepo = AppDataSource.getRepository(User);
+    const responseRepo = AppDataSource.getRepository(FoodResponse);
+
+    // Buscar usuario por DNI
+    const user = await userRepo.findOne({ where: { dni } });
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    // Buscar el último id_response de ese usuario
+    const lastResponse = await responseRepo
+      .createQueryBuilder("fr")
+      .leftJoin("fr.user", "user")
+      .where("user.dni = :dni", { dni })
+      .select("fr.id_response", "id_response")
+      .orderBy("fr.createdAt", "DESC")
+      .getRawOne();
+
+    if (!lastResponse) {
+      return res.json({ user, foods: [] });
+    }
+
+    // Traer todas las respuestas de ese id_response
+    const responses = await responseRepo.find({
+      where: { user: { id: user.id }, id_response: lastResponse.id_response },
+      relations: ["food"], // Para obtener nombre del alimento
+      order: { food: { name: "ASC" } },
+    });
+
+    // Transformar la respuesta para el frontend
+    const foods = responses.map((r) => ({
+      foodName: r.food.name,
+      quantity: r.quantity,
+      frequency: r.frequency,
+      observations: r.observations,
+    }));
+
+    res.json({
+      user: {
+        dni: user.dni,
+        apellido: user.apellido,
+        email: user.email,
+      },
+      foods,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener respuestas" });
+  }
+});
+
 
 
 export default router;

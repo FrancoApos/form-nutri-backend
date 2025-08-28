@@ -12,6 +12,10 @@ export class User {
   @Column()
   apellido!: string;
 
+  @Column({ unique: true })
+  email!: string;   // 👈 nuevo campo email
+
   @OneToMany(() => FoodResponse, (response) => response.user)
   responses!: FoodResponse[];
 }
+
