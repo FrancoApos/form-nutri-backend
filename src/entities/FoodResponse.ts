@@ -23,7 +23,7 @@ export class FoodResponse {
   observations!: string;
 
   // Nuevo campo: ID de grupo de respuestas (un envío)
-  @Column()
+  @Column({ nullable: true })
   id_response!: string;
 
   @CreateDateColumn()
