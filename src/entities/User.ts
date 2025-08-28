@@ -12,7 +12,7 @@ export class User {
   @Column()
   apellido!: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true  })
   email!: string;   // 👈 nuevo campo email
 
   @OneToMany(() => FoodResponse, (response) => response.user)
