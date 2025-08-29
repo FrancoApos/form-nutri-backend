@@ -225,33 +225,29 @@ router.get('/export-responses', async (req, res) => {
   try {
     const repo = AppDataSource.getRepository(FoodResponse);
 
-    // Traer todas las respuestas con relaciones
+    // 1️⃣ Traer el último id_response por usuario
+    const latestResponses = await repo
+      .createQueryBuilder('fr')
+      .select('DISTINCT ON (fr.userId) fr.id_response', 'id_response')
+      .addSelect('fr.userId', 'userId')
+      .orderBy('fr.userId', 'ASC')
+      .addOrderBy('fr.createdAt', 'DESC') // tomar el más reciente
+      .getRawMany();
+
+    const idResponsesToFetch = latestResponses.map(r => r.id_response);
+
+    // 2️⃣ Traer todas las filas de esos formularios
     const responses = await repo
       .createQueryBuilder('fr')
       .leftJoinAndSelect('fr.user', 'u')
       .leftJoinAndSelect('fr.food', 'f')
       .leftJoinAndSelect('f.category', 'c')
+      .where('fr.id_response IN (:...ids)', { ids: idResponsesToFetch })
       .orderBy('fr.userId', 'ASC')
-      .addOrderBy('fr.id_response', 'ASC')
       .addOrderBy('fr.createdAt', 'ASC')
       .getMany();
 
-    // Agrupar por userId + id_response para evitar traer distintos formularios duplicados
-    // pero no eliminamos filas del mismo formulario
-    const grouped: FoodResponse[] = [];
-    const seenResponses = new Set<string>();
-
-    for (const r of responses) {
-      const key = `${r.user.id}-${r.id_response}`;
-      if (!seenResponses.has(key)) {
-        // marcar este id_response como procesado
-        seenResponses.add(key);
-      }
-      // siempre agregar la fila
-      grouped.push(r);
-    }
-
-    // Crear Excel
+    // 3️⃣ Generar Excel
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Respuestas');
 
@@ -266,7 +262,7 @@ router.get('/export-responses', async (req, res) => {
       { header: 'createdAt', key: 'createdAt', width: 20 },
     ];
 
-    grouped.forEach((r) => {
+    responses.forEach(r => {
       sheet.addRow({
         user_id: r.user.id,
         user_apellido: r.user.apellido,
