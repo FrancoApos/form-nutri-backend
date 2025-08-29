@@ -225,32 +225,36 @@ router.get('/export-responses', async (req, res) => {
   try {
     const repo = AppDataSource.getRepository(FoodResponse);
 
-    // Obtener respuestas agrupadas por id_response para evitar duplicados de un mismo formulario
+    // Traer todas las respuestas con relaciones
     const responses = await repo
       .createQueryBuilder('fr')
       .leftJoinAndSelect('fr.user', 'u')
       .leftJoinAndSelect('fr.food', 'f')
-      .leftJoinAndSelect('f.category', 'c') // si tenés relación FoodItem -> Category
-      .orderBy('fr.createdAt', 'ASC')
+      .leftJoinAndSelect('f.category', 'c')
+      .orderBy('fr.userId', 'ASC')
+      .addOrderBy('fr.id_response', 'ASC')
+      .addOrderBy('fr.createdAt', 'ASC')
       .getMany();
 
-    // Filtrar para que cada userId + id_response aparezca una sola vez
-    const filtered: FoodResponse[] = [];
-    const seen = new Set<string>();
+    // Agrupar por userId + id_response para evitar traer distintos formularios duplicados
+    // pero no eliminamos filas del mismo formulario
+    const grouped: FoodResponse[] = [];
+    const seenResponses = new Set<string>();
 
     for (const r of responses) {
       const key = `${r.user.id}-${r.id_response}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        filtered.push(r);
+      if (!seenResponses.has(key)) {
+        // marcar este id_response como procesado
+        seenResponses.add(key);
       }
+      // siempre agregar la fila
+      grouped.push(r);
     }
 
     // Crear Excel
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Respuestas');
 
-    // Cabecera
     sheet.columns = [
       { header: 'user_id', key: 'user_id', width: 10 },
       { header: 'user_apellido', key: 'user_apellido', width: 20 },
@@ -262,13 +266,12 @@ router.get('/export-responses', async (req, res) => {
       { header: 'createdAt', key: 'createdAt', width: 20 },
     ];
 
-    // Agregar filas
-    filtered.forEach((r) => {
+    grouped.forEach((r) => {
       sheet.addRow({
         user_id: r.user.id,
         user_apellido: r.user.apellido,
         food_nombre: r.food.name,
-        categoria: r.food.category?.name ?? '', // si category es relación
+        categoria: r.food.category?.name ?? '',
         quantity: r.quantity,
         frequency: r.frequency,
         observations: r.observations,
@@ -276,7 +279,6 @@ router.get('/export-responses', async (req, res) => {
       });
     });
 
-    // Enviar archivo como descarga
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
