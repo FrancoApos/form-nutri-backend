@@ -225,55 +225,67 @@ router.get('/export-responses', async (req, res) => {
   try {
     const repo = AppDataSource.getRepository(FoodResponse);
 
-    // 1️⃣ Traer el último id_response por usuario
+    // 1) Último id_response por usuario
     const latestResponses = await repo
       .createQueryBuilder('fr')
       .select('DISTINCT ON (fr.userId) fr.id_response', 'id_response')
       .addSelect('fr.userId', 'userId')
       .orderBy('fr.userId', 'ASC')
-      .addOrderBy('fr.createdAt', 'DESC') // tomar el más reciente
+      .addOrderBy('fr.createdAt', 'DESC')
       .getRawMany();
 
     const idResponsesToFetch = latestResponses.map(r => r.id_response);
 
-    // 2️⃣ Traer todas las filas de esos formularios
+    // Guardar si no hay datos
+    if (idResponsesToFetch.length === 0) {
+      res.status(204).end(); // No Content
+      return;
+    }
+
+    // 2) Traer todas las filas de esos formularios
     const responses = await repo
       .createQueryBuilder('fr')
       .leftJoinAndSelect('fr.user', 'u')
-      .leftJoinAndSelect('fr.food', 'f')
+      .leftJoinAndSelect('fr.food', 'f')     // f.grams viene de FoodItem
       .leftJoinAndSelect('f.category', 'c')
       .where('fr.id_response IN (:...ids)', { ids: idResponsesToFetch })
       .orderBy('fr.userId', 'ASC')
       .addOrderBy('fr.createdAt', 'ASC')
       .getMany();
 
-    // 3️⃣ Generar Excel
+    // 3) Generar Excel
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Respuestas');
 
     sheet.columns = [
-      { header: 'user_id', key: 'user_id', width: 10 },
-      { header: 'user_apellido', key: 'user_apellido', width: 20 },
-      { header: 'food_nombre', key: 'food_nombre', width: 30 },
-      { header: 'categoria', key: 'categoria', width: 20 },
-      { header: 'quantity', key: 'quantity', width: 15 },
-      { header: 'frequency', key: 'frequency', width: 15 },
-      { header: 'observations', key: 'observations', width: 30 },
-      { header: 'createdAt', key: 'createdAt', width: 20 },
+      { header: 'user_id',        key: 'user_id',        width: 10 },
+      { header: 'user_apellido',  key: 'user_apellido',  width: 20 },
+      { header: 'food_nombre',    key: 'food_nombre',    width: 30 },
+      { header: 'categoria',      key: 'categoria',      width: 24 },
+      { header: 'quantity',       key: 'quantity',       width: 15 },
+      { header: 'grams',          key: 'grams',          width: 12 }, // 👈 NUEVA
+      { header: 'frequency',      key: 'frequency',      width: 15 },
+      { header: 'observations',   key: 'observations',   width: 30 },
+      { header: 'createdAt',      key: 'createdAt',      width: 20 },
     ];
 
     responses.forEach(r => {
       sheet.addRow({
-        user_id: r.user.id,
+        user_id:       r.user.id,
         user_apellido: r.user.apellido,
-        food_nombre: r.food.name,
-        categoria: r.food.category?.name ?? '',
-        quantity: r.quantity,
-        frequency: r.frequency,
-        observations: r.observations,
-        createdAt: r.createdAt,
+        food_nombre:   r.food.name,
+        categoria:     r.food.category?.name ?? '',
+        quantity:      r.quantity,
+        grams:         r.food?.grams ?? null,   // 👈 toma el grams del FoodItem matcheado
+        frequency:     r.frequency,
+        observations:  r.observations,
+        createdAt:     r.createdAt,
       });
     });
+
+    // (Opcional) Formato numérico a 2 decimales
+    // const gramsCol = sheet.getColumn('grams');
+    // gramsCol.numFmt = '0.00';
 
     res.setHeader(
       'Content-Type',
@@ -288,6 +300,7 @@ router.get('/export-responses', async (req, res) => {
     res.status(500).json({ message: 'Error generando Excel' });
   }
 });
+
 
 
 export default router;
