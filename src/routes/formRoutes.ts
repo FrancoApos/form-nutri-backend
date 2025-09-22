@@ -305,33 +305,55 @@ router.get("/foods", async (_req, res) => {
   try {
     const items = await AppDataSource.getRepository(FoodItem).find({
       relations: ["category"],
-      select: { id: true, name: true, category: { id: true, name: true } },
+      select: { 
+        id: true, 
+        name: true, 
+        quantity: true,     // 👈 incluir quantity
+        grams: true,        // 👈 incluir grams
+        category: { id: true, name: true } 
+      },
       order: { category: { id: "ASC" }, id: "ASC" },
     });
 
-    type CatPayload = { id: number | null; name: string; items: { id: number; name: string }[] };
+    type CatItem = {
+      id: number;
+      name: string;
+      defaultQuantity: string;     // (desde food_item.quantity)
+      grams: number | null;        // (desde food_item.grams)
+    };
+    type CatPayload = { 
+      id: number | null; 
+      name: string; 
+      items: CatItem[];
+    };
 
-    const grouped = new Map<number, CatPayload>(); // clave SIEMPRE number
-    const UNCATEGORIZED_KEY = 0;                   // centinela
+    const grouped = new Map<number, CatPayload>();
+    const UNCATEGORIZED_KEY = 0;
 
     for (const it of items) {
-      const catId = it.category?.id ?? UNCATEGORIZED_KEY;          // number
+      const catId = it.category?.id ?? UNCATEGORIZED_KEY;
       const catName = it.category?.name ?? "Sin categoría";
 
       if (!grouped.has(catId)) {
         grouped.set(catId, {
-          id: catId === UNCATEGORIZED_KEY ? null : catId,          // para el payload
+          id: catId === UNCATEGORIZED_KEY ? null : catId,
           name: catName,
           items: [],
         });
       }
-      grouped.get(catId)!.items.push({ id: it.id, name: it.name });
+      grouped.get(catId)!.items.push({
+        id: it.id,
+        name: it.name,
+        defaultQuantity: it.quantity ?? "",     
+        grams: it.grams ?? null,                
+      });
     }
 
-    // ordenar: primero categorías reales (>0), al final la “sin categoría”
-    const realCats = [...grouped.entries()].filter(([k]) => k !== UNCATEGORIZED_KEY)
+    const realCats = [...grouped.entries()]
+      .filter(([k]) => k !== UNCATEGORIZED_KEY)
       .sort((a, b) => a[0] - b[0])
       .map(([, v]) => v);
+
     const uncategorized = grouped.get(UNCATEGORIZED_KEY);
     const payload = uncategorized ? [...realCats, uncategorized] : realCats;
 
@@ -341,8 +363,6 @@ router.get("/foods", async (_req, res) => {
     res.status(500).json({ message: "Error obteniendo alimentos" });
   }
 });
-
-
 
 
 export default router;
