@@ -3,40 +3,60 @@ import { AppDataSource } from "../data-source";
 import { User } from "../entities/User";
 import { FoodItem } from "../entities/FoodItem";
 import { FoodResponse } from "../entities/FoodResponse";
+import ExcelJS from 'exceljs';
 
+import { v4 as uuidv4 } from "uuid";
 const router = Router();
+
 
 router.post("/submit", async (req, res) => {
   try {
-    const { apellido, dni, foods } = req.body;
-    if (!dni || !apellido || !foods) return res.status(400).json({ message: "Datos incompletos" });
+    const { apellido, dni, email, foods } = req.body;
+    if (!dni || !apellido || !email || !foods) {
+      return res.status(400).json({ message: "Datos incompletos" });
+    }
 
     const userRepo = AppDataSource.getRepository(User);
     let user = await userRepo.findOne({ where: { dni } });
 
     if (!user) {
-      user = userRepo.create({ dni, apellido });
+      user = userRepo.create({ dni, apellido, email });
+      await userRepo.save(user);
+    } else {
+      user.apellido = apellido;
+      user.email = email;
       await userRepo.save(user);
     }
 
     const foodItemRepo = AppDataSource.getRepository(FoodItem);
     const responseRepo = AppDataSource.getRepository(FoodResponse);
 
+    // Generar un único id_response para este envío
+    const id_response = uuidv4();
+
     for (const foodName in foods) {
       const item = await foodItemRepo.findOne({ where: { name: foodName } });
       if (!item) continue;
 
       const { quantity, frequency, observations } = foods[foodName];
-      const response = responseRepo.create({ user, food: item, quantity, frequency, observations });
+      const response = responseRepo.create({
+        user,
+        food: item,
+        quantity,
+        frequency,
+        observations,
+        id_response, // 👈 lo guardamos en cada respuesta
+      });
       await responseRepo.save(response);
     }
 
-    res.json({ message: "Respuestas guardadas correctamente" });
+    res.json({ message: "Respuestas guardadas correctamente", id_response });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error al guardar respuestas" });
   }
 });
+
 
 router.get("/responses/:dni", async (req, res) => {
   try {
@@ -148,45 +168,139 @@ router.get("/stats/user/:dni", async (req, res) => {
   }
 });
 
-router.get("/foods", async (_req, res) => {
+router.get("/responses/:dni", async (req, res) => {
   try {
-    const items = await AppDataSource.getRepository(FoodItem).find({
-      relations: ["category"],
-      select: { id: true, name: true, category: { id: true, name: true } },
-      order: { category: { id: "ASC" }, id: "ASC" },
-    });
+    const { dni } = req.params;
 
-    type CatPayload = { id: number | null; name: string; items: { id: number; name: string }[] };
+    const userRepo = AppDataSource.getRepository(User);
+    const responseRepo = AppDataSource.getRepository(FoodResponse);
 
-    const grouped = new Map<number, CatPayload>(); // clave SIEMPRE number
-    const UNCATEGORIZED_KEY = 0;                   // centinela
+    // Buscar usuario por DNI
+    const user = await userRepo.findOne({ where: { dni } });
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
-    for (const it of items) {
-      const catId = it.category?.id ?? UNCATEGORIZED_KEY;          // number
-      const catName = it.category?.name ?? "Sin categoría";
+    // Buscar el último id_response de ese usuario
+    const lastResponse = await responseRepo
+      .createQueryBuilder("fr")
+      .leftJoin("fr.user", "user")
+      .where("user.dni = :dni", { dni })
+      .select("fr.id_response", "id_response")
+      .orderBy("fr.createdAt", "DESC")
+      .getRawOne();
 
-      if (!grouped.has(catId)) {
-        grouped.set(catId, {
-          id: catId === UNCATEGORIZED_KEY ? null : catId,          // para el payload
-          name: catName,
-          items: [],
-        });
-      }
-      grouped.get(catId)!.items.push({ id: it.id, name: it.name });
+    if (!lastResponse) {
+      return res.json({ user, foods: [] });
     }
 
-    // ordenar: primero categorías reales (>0), al final la “sin categoría”
-    const realCats = [...grouped.entries()].filter(([k]) => k !== UNCATEGORIZED_KEY)
-      .sort((a, b) => a[0] - b[0])
-      .map(([, v]) => v);
-    const uncategorized = grouped.get(UNCATEGORIZED_KEY);
-    const payload = uncategorized ? [...realCats, uncategorized] : realCats;
+    // Traer todas las respuestas de ese id_response
+    const responses = await responseRepo.find({
+      where: { user: { id: user.id }, id_response: lastResponse.id_response },
+      relations: ["food"], // Para obtener nombre del alimento
+      order: { food: { name: "ASC" } },
+    });
 
-    res.json(payload);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error obteniendo alimentos" });
+    // Transformar la respuesta para el frontend
+    const foods = responses.map((r) => ({
+      foodName: r.food.name,
+      quantity: r.quantity,
+      frequency: r.frequency,
+      observations: r.observations,
+    }));
+
+    res.json({
+      user: {
+        dni: user.dni,
+        apellido: user.apellido,
+        email: user.email,
+      },
+      foods,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener respuestas" });
   }
 });
+
+router.get('/export-responses', async (req, res) => {
+  try {
+    const repo = AppDataSource.getRepository(FoodResponse);
+
+    // 1) Último id_response por usuario
+    const latestResponses = await repo
+      .createQueryBuilder('fr')
+      .select('DISTINCT ON (fr.userId) fr.id_response', 'id_response')
+      .addSelect('fr.userId', 'userId')
+      .orderBy('fr.userId', 'ASC')
+      .addOrderBy('fr.createdAt', 'DESC')
+      .getRawMany();
+
+    const idResponsesToFetch = latestResponses.map(r => r.id_response);
+
+    // Guardar si no hay datos
+    if (idResponsesToFetch.length === 0) {
+      res.status(204).end(); // No Content
+      return;
+    }
+
+    // 2) Traer todas las filas de esos formularios
+    const responses = await repo
+      .createQueryBuilder('fr')
+      .leftJoinAndSelect('fr.user', 'u')
+      .leftJoinAndSelect('fr.food', 'f')     // f.grams viene de FoodItem
+      .leftJoinAndSelect('f.category', 'c')
+      .where('fr.id_response IN (:...ids)', { ids: idResponsesToFetch })
+      .orderBy('fr.userId', 'ASC')
+      .addOrderBy('fr.createdAt', 'ASC')
+      .getMany();
+
+    // 3) Generar Excel
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Respuestas');
+
+    sheet.columns = [
+      { header: 'user_id',        key: 'user_id',        width: 10 },
+      { header: 'user_apellido',  key: 'user_apellido',  width: 20 },
+      { header: 'food_nombre',    key: 'food_nombre',    width: 30 },
+      { header: 'categoria',      key: 'categoria',      width: 24 },
+      { header: 'quantity',       key: 'quantity',       width: 15 },
+      { header: 'grams',          key: 'grams',          width: 12 }, // 👈 NUEVA
+      { header: 'frequency',      key: 'frequency',      width: 15 },
+      { header: 'observations',   key: 'observations',   width: 30 },
+      { header: 'createdAt',      key: 'createdAt',      width: 20 },
+    ];
+
+    responses.forEach(r => {
+      sheet.addRow({
+        user_id:       r.user.id,
+        user_apellido: r.user.apellido,
+        food_nombre:   r.food.name,
+        categoria:     r.food.category?.name ?? '',
+        quantity:      r.quantity,
+        grams:         r.food?.grams ?? null,   // 👈 toma el grams del FoodItem matcheado
+        frequency:     r.frequency,
+        observations:  r.observations,
+        createdAt:     r.createdAt,
+      });
+    });
+
+    // (Opcional) Formato numérico a 2 decimales
+    // const gramsCol = sheet.getColumn('grams');
+    // gramsCol.numFmt = '0.00';
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', 'attachment; filename="respuestas.xlsx"');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error generando Excel' });
+  }
+});
+
+
 
 export default router;
