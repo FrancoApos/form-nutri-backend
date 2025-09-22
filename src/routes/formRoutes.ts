@@ -12,45 +12,46 @@ const router = Router();
 router.post("/submit", async (req, res) => {
   try {
     const { apellido, dni, email, foods } = req.body;
-    if (!dni || !apellido || !email || !foods) {
+
+    if (!dni || !apellido || !email || !Array.isArray(foods)) {
       return res.status(400).json({ message: "Datos incompletos" });
     }
 
-    const userRepo = AppDataSource.getRepository(User);
-    let user = await userRepo.findOne({ where: { dni } });
+    await AppDataSource.transaction(async (trx) => {
+      const userRepo = trx.getRepository(User);
+      const frRepo = trx.getRepository(FoodResponse);
 
-    if (!user) {
-      user = userRepo.create({ dni, apellido, email });
+      // upsert user por dni
+      let user = await userRepo.findOne({ where: { dni } });
+      if (!user) {
+        user = userRepo.create({ dni, apellido, email });
+      } else {
+        user.apellido = apellido ?? user.apellido;
+        user.email = email ?? user.email;
+      }
       await userRepo.save(user);
-    } else {
-      user.apellido = apellido;
-      user.email = email;
-      await userRepo.save(user);
-    }
 
-    const foodItemRepo = AppDataSource.getRepository(FoodItem);
-    const responseRepo = AppDataSource.getRepository(FoodResponse);
+      // construir filas usando RELACIONES (no userId/foodId)
+      const id_response = uuidv4();
+      const rows = foods
+        .filter((f: any) => f && typeof f.foodId !== "undefined" && f.frequency)
+        .map((f: any) => ({
+          user: { id: user.id } as any,
+          food: { id: Number(f.foodId) } as any,
+          quantity: String(f.quantity ?? ""),
+          frequency: String(f.frequency ?? ""),
+          observations: f.observations ?? null,
+          id_response,
+        }));
 
-    // Generar un único id_response para este envío
-    const id_response = uuidv4();
+      if (rows.length === 0) {
+        return res.status(400).json({ message: "No hay respuestas válidas para guardar" });
+      }
 
-    for (const foodName in foods) {
-      const item = await foodItemRepo.findOne({ where: { name: foodName } });
-      if (!item) continue;
+      await frRepo.createQueryBuilder().insert().into(FoodResponse).values(rows).execute();
 
-      const { quantity, frequency, observations } = foods[foodName];
-      const response = responseRepo.create({
-        user,
-        food: item,
-        quantity,
-        frequency,
-        observations,
-        id_response, // 👈 lo guardamos en cada respuesta
-      });
-      await responseRepo.save(response);
-    }
-
-    res.json({ message: "Respuestas guardadas correctamente", id_response });
+      res.json({ message: "Respuestas guardadas correctamente", id_response });
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error al guardar respuestas" });
