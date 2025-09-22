@@ -57,7 +57,6 @@ router.post("/submit", async (req, res) => {
   }
 });
 
-
 router.get("/responses/:dni", async (req, res) => {
   try {
     const { dni } = req.params;
