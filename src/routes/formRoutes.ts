@@ -225,46 +225,64 @@ router.get('/export-responses', async (req, res) => {
   try {
     const repo = AppDataSource.getRepository(FoodResponse);
 
-    // 1) Último id_response por usuario
+    // A) Construimos el orden "oficial" de los alimentos (igual al del form)
+    const foodOrderRows = await AppDataSource.getRepository(FoodItem)
+      .createQueryBuilder('fi')
+      .leftJoin('fi.category', 'c')
+      .select('fi.id', 'id')
+      .orderBy('c.id', 'ASC')
+      .addOrderBy('fi.id', 'ASC')
+      .getRawMany<{ id: number }>();
+
+    const foodOrder: number[] = foodOrderRows.map(r => Number(r.id));
+    if (foodOrder.length === 0) {
+      return res.status(204).end(); // No hay alimentos
+    }
+
+    // B) Último id_response por usuario (1 envío más reciente por usuario)
     const latestResponses = await repo
       .createQueryBuilder('fr')
       .select('DISTINCT ON (fr.userId) fr.id_response', 'id_response')
       .addSelect('fr.userId', 'userId')
       .orderBy('fr.userId', 'ASC')
       .addOrderBy('fr.createdAt', 'DESC')
-      .getRawMany();
+      .getRawMany<{ id_response: string; userId: number }>();
 
     const idResponsesToFetch = latestResponses.map(r => r.id_response);
-
-    // Guardar si no hay datos
     if (idResponsesToFetch.length === 0) {
-      res.status(204).end(); // No Content
-      return;
+      return res.status(204).end(); // No Content
     }
 
-    // 2) Traer todas las filas de esos formularios
+    // C) Traer filas del último formulario por usuario, ordenadas:
+    //    1) por usuario (apellido ASC, luego id)
+    //    2) por el orden oficial de alimentos (array_position)
+    //    3) estable por createdAt por si hay empates
+    const orderSql = `array_position(ARRAY[${foodOrder.join(',')}], f.id)`; // seguro: viene de la DB
+
     const responses = await repo
       .createQueryBuilder('fr')
       .leftJoinAndSelect('fr.user', 'u')
-      .leftJoinAndSelect('fr.food', 'f')     // f.grams viene de FoodItem
+      .leftJoinAndSelect('fr.food', 'f')
       .leftJoinAndSelect('f.category', 'c')
       .where('fr.id_response IN (:...ids)', { ids: idResponsesToFetch })
-      .orderBy('fr.userId', 'ASC')
+      .orderBy('u.apellido', 'ASC')
+      .addOrderBy('u.id', 'ASC')
+      .addOrderBy(orderSql, 'ASC')   // 👈 orden del formulario
       .addOrderBy('fr.createdAt', 'ASC')
       .getMany();
 
-    // 3) Generar Excel
+    // D) Generar Excel
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Respuestas');
 
     sheet.columns = [
       { header: 'user_id',        key: 'user_id',        width: 10 },
       { header: 'user_apellido',  key: 'user_apellido',  width: 20 },
-      { header: 'food_nombre',    key: 'food_nombre',    width: 30 },
-      { header: 'categoria',      key: 'categoria',      width: 24 },
-      { header: 'quantity',       key: 'quantity',       width: 15 },
-      { header: 'grams',          key: 'grams',          width: 12 }, // 👈 NUEVA
-      { header: 'frequency',      key: 'frequency',      width: 15 },
+      { header: 'food_nombre',    key: 'food_nombre',    width: 40 },
+      { header: 'categoria',      key: 'categoria',      width: 28 },
+      { header: 'quantity',       key: 'quantity',       width: 16 },
+      { header: 'grams',          key: 'grams',          width: 10 },
+      { header: 'frequency',      key: 'frequency',      width: 14 },
       { header: 'observations',   key: 'observations',   width: 30 },
       { header: 'createdAt',      key: 'createdAt',      width: 20 },
     ];
@@ -276,16 +294,12 @@ router.get('/export-responses', async (req, res) => {
         food_nombre:   r.food.name,
         categoria:     r.food.category?.name ?? '',
         quantity:      r.quantity,
-        grams:         r.food?.grams ?? null,   // 👈 toma el grams del FoodItem matcheado
+        grams:         r.food?.grams ?? null,
         frequency:     r.frequency,
         observations:  r.observations,
         createdAt:     r.createdAt,
       });
     });
-
-    // (Opcional) Formato numérico a 2 decimales
-    // const gramsCol = sheet.getColumn('grams');
-    // gramsCol.numFmt = '0.00';
 
     res.setHeader(
       'Content-Type',
