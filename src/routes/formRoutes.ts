@@ -277,6 +277,7 @@ router.get('/export-responses', async (req, res) => {
 
     sheet.columns = [
       { header: 'user_id',        key: 'user_id',        width: 10 },
+      { header: 'dni',            key: 'dni',            width: 14 },
       { header: 'user_apellido',  key: 'user_apellido',  width: 20 },
       { header: 'food_nombre',    key: 'food_nombre',    width: 40 },
       { header: 'categoria',      key: 'categoria',      width: 28 },
@@ -290,6 +291,7 @@ router.get('/export-responses', async (req, res) => {
     responses.forEach(r => {
       sheet.addRow({
         user_id:       r.user.id,
+        dni:           r.user.dni,  
         user_apellido: r.user.apellido,
         food_nombre:   r.food.name,
         categoria:     r.food.category?.name ?? '',
